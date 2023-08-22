@@ -4,26 +4,13 @@ pub fn build(b: *std.build.Builder) !void {
     const qemu = b.step("qemu", "Run the kernel under qemu-system-x86_64");
     const buildKernel = kernel(b);
     b.step("kernel", "Build the kernel").dependOn(&buildKernel.step);
-    
-    const writer = b.addWriteFiles();
-    for (&[_][2][]const u8{
-        .{ "./limine/limine-bios-cd.bin", "limine-bios-cd.bin" },
-        .{ "./limine/limine-bios.sys", "limine-bios.sys" },
-        .{ "./limine.cfg", "limine.cfg" },
-    }) |pair| _ = writer.addCopyFile(.{ .path = pair[0] }, pair[1]);
-    
+
     const zigIso = BuildIso.create(b);
     for (&[_][2][]const u8{
         .{ "./limine/limine-bios-cd.bin", "limine-bios-cd.bin" },
         .{ "./limine/limine-bios.sys", "limine-bios.sys" },
         .{ "./limine.cfg", "limine.cfg" },
     }) |pair| zigIso.addCopyFile(.{ .path = pair[0] }, pair[1]);
-    b.step("iso", "Build the iso").dependOn(&zigIso.step);
-
-    const makeIso = b.addSystemCommand(&.{ "xorriso", "-as", "mkisofs" });
-    makeIso.addDirectoryArg(writer.getDirectory());
-    makeIso.addArg("-o");
-    const iso = makeIso.addOutputFileArg("barebones.iso");
 
     const limine = b.addExecutable(.{
         .name = "limine-install",
@@ -31,14 +18,12 @@ pub fn build(b: *std.build.Builder) !void {
     limine.addIncludePath(.{ .path = "./limine" });
     limine.addCSourceFile(.{ .file = .{ .path = "./limine/limine.c" }, .flags = &[_][]const u8{} });
     limine.linkLibC();
-    const notiso = .{ .generated = &zigIso.generated_file };
-    _ = iso;
-    const biosInstall = BiosInstall.create(b, limine, notiso, "barebones.iso");
-    const patchedBios: std.Build.LazyPath = .{ .generated = &biosInstall.generated_file };
 
-    const qemuStep = b.addSystemCommand(&.{ "qemu-system-x86_64" });
+    const biosInstall = BiosInstall.create(b, limine, .{ .generated = &zigIso.generated_file }, "barebones.iso");
+
+    const qemuStep = b.addSystemCommand(&.{"qemu-system-x86_64"});
     qemuStep.addArg("-drive");
-    qemuStep.addPrefixedFileArg("format=raw,file=", patchedBios);
+    qemuStep.addPrefixedFileArg("format=raw,file=", .{ .generated = &biosInstall.generated_file });
     qemuStep.addArg("-drive");
     qemuStep.addPrefixedFileArg("format=raw,file=fat:rw:", buildKernel.getEmittedBinDirectory());
 
@@ -47,7 +32,7 @@ pub fn build(b: *std.build.Builder) !void {
 const iso32 = extern struct {
     bytes: [8]u8,
     fn create(n: u32) @This() {
-        var bytes = [_]u8{ 0 } ** 8;
+        var bytes = [_]u8{0} ** 8;
         std.mem.writeIntLittle(u32, bytes[0..4], n);
         std.mem.writeIntBig(u32, bytes[4..8], n);
         return .{
@@ -58,7 +43,7 @@ const iso32 = extern struct {
 const iso16 = extern struct {
     bytes: [4]u8,
     fn create(n: i16) @This() {
-        var bytes = [_]u8{ 0 } ** 4;
+        var bytes = [_]u8{0} ** 4;
         std.mem.writeIntLittle(i16, bytes[0..2], n);
         std.mem.writeIntBig(i16, bytes[2..4], n);
         return .{
@@ -69,7 +54,7 @@ const iso16 = extern struct {
 const le32 = extern struct {
     bytes: [4]u8,
     fn create(n: i32) @This() {
-        var bytes = [_]u8{ 0 } ** 4;
+        var bytes = [_]u8{0} ** 4;
         std.mem.writeIntLittle(i32, bytes[0..], n);
         return .{
             .bytes = bytes,
@@ -79,7 +64,7 @@ const le32 = extern struct {
 const be32 = extern struct {
     bytes: [4]u8,
     fn create(n: i32) @This() {
-        var bytes = [_]u8{ 0 } ** 4;
+        var bytes = [_]u8{0} ** 4;
         std.mem.writeIntBig(i32, bytes[0..], n);
         return .{
             .bytes = bytes,
@@ -87,13 +72,13 @@ const be32 = extern struct {
     }
 };
 const datetime = extern struct {
-    year: [4]u8 = .{0,0,0,0},
-    month: [2]u8 = .{0,1},
-    day: [2]u8 = .{0,1},
-    hour: [2]u8 = .{0,0},
-    minute: [2]u8 = .{0,0},
-    second: [2]u8 = .{0,0},
-    hundredths: [2]u8 = .{0,0},
+    year: [4]u8 = .{ 0, 0, 0, 0 },
+    month: [2]u8 = .{ 0, 1 },
+    day: [2]u8 = .{ 0, 1 },
+    hour: [2]u8 = .{ 0, 0 },
+    minute: [2]u8 = .{ 0, 0 },
+    second: [2]u8 = .{ 0, 0 },
+    hundredths: [2]u8 = .{ 0, 0 },
     timezone: u8 = 48,
 };
 const DirectoryRecordHeader = extern struct {
@@ -117,61 +102,54 @@ const DirectoryRecordHeader = extern struct {
     volume_sequence_number: iso16 = iso16.create(1),
     name_length: u8,
 };
-const VolumeDescriptor = extern struct {
-    Type: enum(u8) {
-        boot,
-        primary,
-        supplementary,
-        partition,
-        terminator = 255,
-    } = .primary,
-    Identifier: [5]u8 = "CD001".*,
-    Data: extern union {
-        terminator: extern struct {
-            Version: u8 = 1,
+const VolumeDescriptor = extern struct { Type: enum(u8) {
+    boot,
+    primary,
+    supplementary,
+    partition,
+    terminator = 255,
+} = .primary, Identifier: [5]u8 = "CD001".*, Data: extern union { terminator: extern struct {
+    Version: u8 = 1,
+}, primary: extern struct {
+    Version: u8 = 1,
+    unused: u8 = 0,
+    system_identifier: [32]u8 = std.mem.zeroes([32]u8),
+    volume_identifier: [32]u8 = std.mem.zeroes([32]u8),
+    unused2: [8]u8 = undefined,
+    volume_space_size: iso32 = iso32.create(0),
+    unused3: [32]u8 = undefined,
+    volume_set_size: iso16 = iso16.create(1),
+    volume_sequence_number: iso16 = iso16.create(1),
+    logical_block_size: iso16 = iso16.create(2048),
+    path_table_size: iso32 = iso32.create(0),
+    type_l_path_table: le32 = le32.create(0),
+    opt_type_l_path_table: le32 = le32.create(0),
+    type_m_path_table: be32 = be32.create(0),
+    opt_type_m_path_table: be32 = be32.create(0),
+    root_directory_record: extern struct {
+        header: DirectoryRecordHeader = .{
+            .length = 34,
+            .name_length = 1,
+            .flags = .{ .directory = 1 },
         },
-        primary: extern struct {
-            Version: u8 = 1,
-            unused: u8 = 0,
-            system_identifier: [32]u8 = std.mem.zeroes([32]u8),
-            volume_identifier: [32]u8 = std.mem.zeroes([32]u8),
-            unused2: [8]u8 = undefined,
-            volume_space_size: iso32 = iso32.create(0),
-            unused3: [32]u8 = undefined,
-            volume_set_size: iso16 = iso16.create(1),
-            volume_sequence_number: iso16 = iso16.create(1),
-            logical_block_size: iso16 = iso16.create(2048),
-            path_table_size: iso32 = iso32.create(0),
-            type_l_path_table: le32 = le32.create(0),
-            opt_type_l_path_table: le32 = le32.create(0),
-            type_m_path_table: be32 = be32.create(0),
-            opt_type_m_path_table: be32 = be32.create(0),
-            root_directory_record: extern struct {
-                header: DirectoryRecordHeader = .{
-                    .length = 34,
-                    .name_length = 1,
-                    .flags = .{ .directory = 1 },
-                },
-                name: [1]u8 = .{0},
-            } = .{},
-            volume_set_identifier: [128]u8 = .{0} ** 128,
-            publisher_identifier: [128]u8 = .{0x20} ** 128,
-            data_preparer_identifier: [128]u8 = .{0x20} ** 128,
-            application_identifier: [128]u8 = .{0x20} ** 128,
-            copyright_file_identifier: [37]u8 = .{0x20} ** 37,
-            abstract_file_identifier: [37]u8 = .{0x20} ** 37,
-            bibliographic_file_identifier: [37]u8 = .{0x20} ** 37,
-            creation_date: datetime = .{},
-            modification_date: datetime = .{},
-            expiration_date: datetime = .{},
-            effective_date: datetime = .{},
-            file_structure_version: u8 = 1,
-            unused4: u8 = 0,
-            application_data: [512]u8 = undefined,
-            reserved: [653]u8 = .{0} ** 653,
-        }
-    }
-};
+        name: [1]u8 = .{0},
+    } = .{},
+    volume_set_identifier: [128]u8 = .{0} ** 128,
+    publisher_identifier: [128]u8 = .{0x20} ** 128,
+    data_preparer_identifier: [128]u8 = .{0x20} ** 128,
+    application_identifier: [128]u8 = .{0x20} ** 128,
+    copyright_file_identifier: [37]u8 = .{0x20} ** 37,
+    abstract_file_identifier: [37]u8 = .{0x20} ** 37,
+    bibliographic_file_identifier: [37]u8 = .{0x20} ** 37,
+    creation_date: datetime = .{},
+    modification_date: datetime = .{},
+    expiration_date: datetime = .{},
+    effective_date: datetime = .{},
+    file_structure_version: u8 = 1,
+    unused4: u8 = 0,
+    application_data: [512]u8 = undefined,
+    reserved: [653]u8 = .{0} ** 653,
+} } };
 comptime {
     if (@sizeOf(datetime) != 17) {
         @compileLog("datetime is not 17 bytes ,its ", @sizeOf(datetime), " bytes");
@@ -205,12 +183,12 @@ const BuildIso = struct {
         };
         return self;
     }
-    pub fn addCopyFile(self: *@This(), source: std.Build.LazyPath, sub_path: []const u8) void{
+    pub fn addCopyFile(self: *@This(), source: std.Build.LazyPath, sub_path: []const u8) void {
         const b = self.step.owner;
         const gpa = b.allocator;
         self.files.append(gpa, .{
             .sub_path = b.dupePath(sub_path),
-            .contents = .{  .given = .{.copy = source } },
+            .contents = .{ .given = .{ .copy = source } },
         }) catch @panic("OOM");
 
         source.addStepDependencies(&self.step);
@@ -229,15 +207,12 @@ const BuildIso = struct {
                 },
                 .copy => |source| {
                     _ = try man.addFile(source.getPath(step.owner), null);
-                }
+                },
             }
         }
         const didhit = try step.cacheHit(&man);
         const digest = man.final();
-        const image_path = try step.owner.cache_root.join(step.owner.allocator, &.{
-            "o", &digest, "image.iso"
-        });
-        std.debug.print("{s}\n", .{image_path});
+        const image_path = try step.owner.cache_root.join(step.owner.allocator, &.{ "o", &digest, "image.iso" });
         self.generated_file.path = image_path;
         if (didhit) {
             step.result_cached = true;
@@ -246,19 +221,10 @@ const BuildIso = struct {
         try step.owner.build_root.handle.makePath(std.fs.path.dirname(image_path).?);
         var file = try step.owner.build_root.handle.createFile(image_path, .{});
         try file.seekBy(32 * 1024);
-        var descriptor = VolumeDescriptor{
-            .Data = .{
-                .primary = .{}
-            }
-        };
+        var descriptor = VolumeDescriptor{ .Data = .{ .primary = .{} } };
         const primary_descriptor_at = try file.getPos();
         try file.writeAll(std.mem.asBytes(&descriptor));
-        const terminator_descriptor = VolumeDescriptor{
-            .Type = .terminator,
-            .Data = .{
-                .terminator = .{}
-            }
-        };
+        const terminator_descriptor = VolumeDescriptor{ .Type = .terminator, .Data = .{ .terminator = .{} } };
         try file.writeAll(std.mem.asBytes(&terminator_descriptor));
         const file_extents_at = std.mem.alignForward(u64, try file.getPos(), 2048);
         var start_of_file = file_extents_at;
@@ -268,7 +234,7 @@ const BuildIso = struct {
             const source_file = try step.owner.build_root.handle.openFile(path, .{});
             const len = try source_file.copyRangeAll(0, file, start_of_file, std.math.maxInt(u64));
             const alignedLen = std.mem.alignForward(u64, len, 2048);
-            file_desc.contents = .{ .copied = .{start_of_file, len} };
+            file_desc.contents = .{ .copied = .{ start_of_file, len } };
             start_of_file += alignedLen;
         }
         const root_directory_at = start_of_file;

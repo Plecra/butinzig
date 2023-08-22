@@ -18,7 +18,6 @@ export fn _start() callconv(.C) noreturn {
                 @as(*u32, @ptrCast(@alignCast(framebuffer.address + pixel_offset))).* = 0xFFFFFFFF;
             }
         }
-
     }
 
     done();
